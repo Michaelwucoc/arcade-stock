@@ -1,6 +1,6 @@
 {
   "name": "koishi-plugin-stock-manager",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "机厅水和饮料库存统计机器人",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",

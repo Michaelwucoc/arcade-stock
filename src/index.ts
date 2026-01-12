@@ -2,6 +2,7 @@ import { Context, Schema, Session } from 'koishi'
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import * as yaml from 'yaml'
+import { randomBytes } from 'crypto'
 
 export const name = 'stock-manager'
 
@@ -28,6 +29,7 @@ export interface StockRecord {
 
 export interface Config {
   whitelistGroups: string[]
+  getCodeTag: string
   items: Array<{
     name: string
     aliases: string[]
@@ -38,6 +40,9 @@ export interface Config {
 
 export const Config: Schema<Config> = Schema.object({
   whitelistGroups: Schema.array(Schema.string()).description('白名单群组ID列表').default([]),
+  getCodeTag: Schema.string()
+    .description('每次修改库存后追加的校验码标识（不含冒号），最终输出为 `${getCodeTag}: 时间戳_QQ号_物品名_随机十六进制数字6位`')
+    .default('wmc_ref'),
   items: Schema.array(Schema.object({
     name: Schema.string().required().description('物品名称'),
     aliases: Schema.array(Schema.string()).required().description('别名列表')
@@ -49,6 +54,12 @@ export const Config: Schema<Config> = Schema.object({
 })
 
 export function apply(ctx: Context, config: Config) {
+  function createGetCode(params: { timestamp: number; userId: string; itemName: string }): string {
+    const rand6 = randomBytes(3).toString('hex') // 6位十六进制
+    const tag = (config.getCodeTag || 'wmc_ref').trim().replace(/:$/, '') || 'wmc_ref'
+    return `${tag}: ${params.timestamp}_${params.userId}_${params.itemName}_${rand6}`
+  }
+
   // 数据文件路径
   const dataDir = join(ctx.baseDir, 'data', 'stock-manager')
   const itemsFile = join(dataDir, 'items.yml')
@@ -365,28 +376,30 @@ export function apply(ctx: Context, config: Config) {
       await saveStockItem(item)
 
       // 记录操作
+      const opTimestamp = Date.now()
       const record: StockRecord = {
         id: 0, // 会在 addRecord 中设置
         itemName: op.itemName,
         userId: session.userId || 'unknown',
         userName: session.author?.nickname || session.username || '未知用户',
         change,
-        timestamp: Date.now(),
+        timestamp: opTimestamp,
         isRanked: !op.noRank
       }
       await addRecord(record)
 
       const changeText = actualOp === '+' ? `+${Math.abs(change)}` : `-${Math.abs(change)}`
+      const getCode = createGetCode({ timestamp: opTimestamp, userId: record.userId, itemName: op.itemName })
       
       // 如果计入了排行榜，显示排行榜更新
       if (!op.noRank) {
         const rankingType = actualOp === '+' ? 'add' : 'consume'
         const ranking = await getRanking(op.itemName, rankingType)
         const rankingTitle = actualOp === '+' ? '累计排行榜' : '消耗排行榜'
-        await session.send(`${op.itemName} ${changeText}，当前库存：${item.count}瓶\n\n${op.itemName}${rankingTitle}：\n${ranking}`)
+        await session.send(`${op.itemName} ${changeText}，当前库存：${item.count}瓶\n\n${op.itemName}${rankingTitle}：\n${ranking}\n\n${getCode}`)
       } else {
         // 不计入排行榜，只显示库存变化
-        await session.send(`${op.itemName} ${changeText}，当前库存：${item.count}瓶（不计入排行榜）`)
+        await session.send(`${op.itemName} ${changeText}，当前库存：${item.count}瓶（不计入排行榜）\n\n${getCode}`)
       }
     } catch (err) {
       ctx.logger('stock-manager').error('保存操作失败:', err)
@@ -538,7 +551,13 @@ export function apply(ctx: Context, config: Config) {
       stockItem.count = count
       try {
         await saveStockItem(stockItem)
-        return `已将${itemName}库存设置为${count}瓶`
+        const opTimestamp = Date.now()
+        const getCode = createGetCode({
+          timestamp: opTimestamp,
+          userId: session.userId || 'unknown',
+          itemName,
+        })
+        return `已将${itemName}库存设置为${count}瓶\n\n${getCode}`
       } catch (err) {
         ctx.logger('stock-manager').error('设置库存失败:', err)
         return '设置库存失败，请稍后重试'

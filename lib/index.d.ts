@@ -19,6 +19,7 @@ export interface StockRecord {
 }
 export interface Config {
     whitelistGroups: string[];
+    getCodeTag: string;
     items: Array<{
         name: string;
         aliases: string[];
